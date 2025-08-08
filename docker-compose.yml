@@ -1,24 +1,93 @@
+version: "3.9"
+
 services:
-  n8n:
-    image: n8nio/n8n:latest # 最新版のn8nイメージを指定
-    container_name: n8n_local # コンテナ名を指定 (任意)
-    restart: unless-stopped # コンテナが停止した場合、手動で停止しない限り再起動
-    ports:
-      - "5678:5678" # ホストOSの5678番ポートをコンテナの5678番ポートに接続
+  #--- DB (Mattermost用) -------------------------------------------------------
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
     environment:
-      # 重要: ワークフローの認証情報などを暗号化するためのキー
-      # 下記のコマンドで生成したランダムな文字列を設定してください
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      # タイムゾーンを日本時間に設定
-      - GENERIC_TIMEZONE=${TZ:-Asia/Tokyo}
-      # その他の設定が必要な場合はここに追加
-      # 例: - N8N_EMAIL_MODE=smtp
-      #     - N8N_SMTP_HOST=your_smtp_host
-      #     ...
+      POSTGRES_DB: mattermost
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: mmuser-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     volumes:
-      # n8nの設定データやワークフローデータを永続化するためのボリューム
+      - pg_data:/var/lib/postgresql/data
+
+  #--- Mattermost --------------------------------------------------------------
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "8065:8065"
+    environment:
+      # サイトURL（ブラウザで開くアドレス）
+      MM_SERVICESETTINGS_SITEURL: "http://localhost:8065"
+
+      # DB接続
+      MM_SQLSETTINGS_DRIVERNAME: "postgres"
+      MM_SQLSETTINGS_DATASOURCE: "postgres://mmuser:mmuser-password@postgres:5432/mattermost?sslmode=disable&connect_timeout=10"
+
+      # （任意）CORS：MMを別オリジンから使う場合に追加
+      MM_SERVICESETTINGS_ALLOWCORSFROM: "http://localhost:5678"
+
+      # （任意）内部向け接続を許可（必要時）
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "n8n,postgres,localhost,127.0.0.1"
+
+      # 初回ウィザード等をスキップしたい場合は必要に応じて環境変数を追加してください
+      # 例: MM_SERVICESETTINGS_ENABLEDEVELOPER: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8065/api/v4/system/ping | grep -q 'OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - mm_config:/mattermost/config
+      - mm_data:/mattermost/data
+      - mm_logs:/mattermost/logs
+      - mm_plugins:/mattermost/plugins
+      - mm_client:/mattermost/client/plugins
+
+  #--- n8n ---------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # n8nが外部へ通知する際に使う外向けURL（今回はlocalhost）
+      WEBHOOK_URL: "http://localhost:5678"
+      N8N_HOST: "localhost"
+      N8N_PROTOCOL: "http"
+      N8N_PORT: "5678"
+
+      # CORS：MM( http://localhost:8065 ) からブラウザ経由でn8nを叩く場合に必要
+      N8N_CORS_ALLOW_ORIGIN: "http://localhost:8065"
+
+      # エディタURL（ズレ防止）
+      N8N_EDITOR_BASE_URL: "http://localhost:5678"
+
+      # （任意）時刻/タイムゾーンや基本設定を足したい場合はここに追加
+      # GENERIC_TIMEZONE: "Asia/Tokyo"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/rest/healthz | grep -q 'ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
       - n8n_data:/home/node/.n8n
 
 volumes:
+  pg_data:
+  mm_config:
+  mm_data:
+  mm_logs:
+  mm_plugins:
+  mm_client:
   n8n_data:
-    # 外部ボリュームを使用する場合などは、ここに設定を追加
