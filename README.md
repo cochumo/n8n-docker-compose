@@ -160,6 +160,15 @@ TZ=Asia/Tokyo
    docker-compose exec postgres pg_isready -U mmuser -d mattermost
    ```
 
+4. slash commandがエラーになる
+localではmattermost側からn8nを見るには以下のようにURLを設定する必要がある
+```md
+x http://localhost:5678/webhook/hello
+o http://n8n:5678/webhook/hello
+```
+
+Mattermostコンテナの中から見た「localhost」＝Mattermost自身 になり、n8nに届かず `connect: connection refused`になるため
+
 ### ログの確認
 
 ```bash
